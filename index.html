@@ -487,7 +487,7 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
 
     try {
       var headers = { "Content-Type": "application/json" };
-      if (accessCode) headers["x-access-code"] = accessCode;
+      if (accessCode) headers["x-access-code"] = encodeURIComponent(accessCode);
       var resp = await fetch(FUNCTION_URL, {
         method: "POST",
         headers: headers,
