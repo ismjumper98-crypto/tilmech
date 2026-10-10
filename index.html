@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Тилмеч</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Unbounded:wght@600&display=swap">
+<style>
+/* Layout: one working surface, two tall panes under a language bar; history below as a plain list. */
+:root {
+  --bg: #F2F4F8;
+  --surface: #FFFFFF;
+  --ink: #14213A;
+  --muted: #5A6780;
+  --line: #D3DAE6;
+  --accent: #B3202C;
+  --accent-ink: #FFFFFF;
+  --key-bg: #E1E7F2;
+  --badge-bg: #F9E3B4;
+  --badge-ink: #6B4200;
+
+  --f-display: "Unbounded", "Golos Text", system-ui, sans-serif;
+  --f-body: "Golos Text", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --t-xs: 12px;
+  --t-sm: 13px;
+  --t-base: 15px;
+  --t-read: 19px;
+  --t-mark: 26px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0F1524;
+    --surface: #182035;
+    --ink: #E8ECF5;
+    --muted: #9AA6BD;
+    --line: #2C3652;
+    --accent: #E5545E;
+    --accent-ink: #190406;
+    --key-bg: #27324F;
+    --badge-bg: #4A3812;
+    --badge-ink: #F6D48A;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0F1524;
+  --surface: #182035;
+  --ink: #E8ECF5;
+  --muted: #9AA6BD;
+  --line: #2C3652;
+  --accent: #E5545E;
+  --accent-ink: #190406;
+  --key-bg: #27324F;
+  --badge-bg: #4A3812;
+  --badge-ink: #F6D48A;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-size: var(--t-base);
+  line-height: 1.5;
+}
+.page {
+  max-width: 1040px;
+  margin-inline: auto;
+  padding-inline: 16px;
+  padding-block: 28px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+h1, h2, p, ul { margin: 0; }
+ul { padding: 0; list-style: none; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sr {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+
+/* Header */
+.top { display: flex; flex-direction: column; gap: 14px; }
+.brand { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+.wordmark {
+  font-family: var(--f-display);
+  font-size: var(--t-mark);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+}
+.tag { color: var(--muted); }
+/* Sawtooth edge, the border stitch of a shyrdak felt carpet */
+.band {
+  height: 8px;
+  background:
+    linear-gradient(135deg, var(--accent) 25%, transparent 25%) 0 0 / 16px 16px,
+    linear-gradient(225deg, var(--accent) 25%, transparent 25%) 0 0 / 16px 16px;
+}
+
+main { display: flex; flex-direction: column; gap: 36px; }
+
+/* Translator surface */
+.translator { display: flex; flex-direction: column; gap: 10px; }
+.work {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.langbar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.lang { text-align: center; font-weight: 600; min-width: 0; }
+.swap {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+}
+.swap:hover:not(:disabled) { border-color: var(--ink); }
+.swap:disabled { opacity: .45; cursor: default; }
+
+.panes { display: grid; grid-template-columns: 1fr 1fr; }
+.pane { min-width: 0; display: flex; flex-direction: column; }
+.pane + .pane { border-left: 1px solid var(--line); }
+#srcText, .outtext {
+  flex: 1;
+  min-height: 280px;
+  padding: 18px;
+  font-family: var(--f-body);
+  font-size: var(--t-read);
+  line-height: 1.5;
+  color: var(--ink);
+}
+#srcText {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  resize: vertical;
+}
+#srcText:focus-visible { outline-offset: -2px; }
+#srcText::placeholder { color: var(--muted); opacity: .8; }
+.outtext { white-space: pre-wrap; overflow-wrap: anywhere; }
+.outtext:empty::before { content: attr(data-ph); color: var(--muted); }
+.outtext.working:empty::before { animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .outtext.working:empty::before { animation: none; } }
+.panefoot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 58px;
+  padding: 10px 12px;
+}
+.grow { flex: 1; }
+.keys { display: flex; gap: 4px; }
+.key {
+  width: 36px; height: 36px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--key-bg);
+  font-size: 17px;
+  font-weight: 500;
+}
+.key:hover { box-shadow: inset 0 0 0 1px var(--ink); }
+.count {
+  font-family: var(--f-mono);
+  font-size: var(--t-xs);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.ghost {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  font-size: var(--t-sm);
+}
+.ghost:hover { border-color: var(--ink); }
+.primary {
+  min-height: 38px;
+  padding: 8px 20px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.primary:hover:not(:disabled) { filter: brightness(1.08); }
+.primary:disabled { opacity: .5; cursor: default; }
+.primary.stop {
+  background: transparent;
+  color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.badge {
+  font-family: var(--f-mono);
+  font-size: var(--t-xs);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--badge-ink);
+  background: var(--badge-bg);
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+.status { min-height: 1.5em; color: var(--muted); font-size: var(--t-sm); }
+.status.warn { color: var(--accent); }
+.access { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: var(--t-sm); }
+.access input {
+  min-height: 36px;
+  width: 14em;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+/* History */
+.sechead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+h2 {
+  font-family: var(--f-display);
+  font-size: 16px;
+  font-weight: 600;
+  text-wrap: balance;
+}
+.history { display: flex; flex-direction: column; gap: 10px; }
+.hist li { border-top: 1px solid var(--line); }
+.hist li:last-child { border-bottom: 1px solid var(--line); }
+.hist button {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+  gap: 4px 16px;
+  align-items: baseline;
+  width: 100%;
+  padding: 11px 4px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.hist button:hover { background: var(--key-bg); }
+.hist .dir { font-family: var(--f-mono); font-size: var(--t-xs); color: var(--muted); }
+.hist .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist .t + .t { color: var(--muted); }
+
+footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
+
+@media (max-width: 720px) {
+  .panes { grid-template-columns: 1fr; }
+  .pane + .pane { border-left: 0; border-top: 1px solid var(--line); }
+  #srcText, .outtext { min-height: 150px; }
+  .hist button { grid-template-columns: auto 1fr; }
+  .hist .t + .t { grid-column: 2; }
+}
+</style>
+</head>
+<body>
+
+<div class="page">
+  <header class="top">
+    <div class="brand">
+      <h1 class="wordmark">Тилмеч</h1>
+      <p class="tag">Кыргызча ↔ русский, перевод по смыслу</p>
+    </div>
+    <div class="band" aria-hidden="true"></div>
+  </header>
+
+  <main>
+    <section class="translator" aria-label="Переводчик">
+      <div class="work">
+        <div class="langbar">
+          <span id="srcLang" class="lang">Кыргызча</span>
+          <button id="swapBtn" type="button" class="swap" aria-label="Поменять языки местами" title="Поменять языки местами">⇄</button>
+          <span id="dstLang" class="lang">Русский</span>
+        </div>
+        <div class="panes">
+          <div class="pane">
+            <label class="sr" for="srcText">Текст для перевода</label>
+            <textarea id="srcText" maxlength="5000" rows="8" spellcheck="false"></textarea>
+            <div class="panefoot">
+              <div id="kyKeys" class="keys" role="group" aria-label="Кыргызские буквы">
+                <button type="button" class="key" data-ch="ө" title="Shift даёт заглавную">ө</button>
+                <button type="button" class="key" data-ch="ү" title="Shift даёт заглавную">ү</button>
+                <button type="button" class="key" data-ch="ң" title="Shift даёт заглавную">ң</button>
+              </div>
+              <span id="counter" class="count">0 / 5000</span>
+              <span class="grow"></span>
+              <button id="clearBtn" type="button" class="ghost">Очистить</button>
+              <button id="goBtn" type="button" class="primary" title="Ctrl + Enter">Перевести</button>
+            </div>
+          </div>
+          <div class="pane">
+            <div id="outText" class="outtext" aria-live="polite" data-ph="Перевод появится здесь"></div>
+            <div class="panefoot">
+              <span id="exampleBadge" class="badge">Пример</span>
+              <span class="grow"></span>
+              <button id="copyBtn" type="button" class="ghost">Скопировать</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p id="status" class="status" role="status"></p>
+      <form id="accessForm" class="access" hidden>
+        <label for="accessCode">Код доступа</label>
+        <input id="accessCode" type="password" autocomplete="off">
+        <button type="submit" class="ghost">Сохранить</button>
+      </form>
+    </section>
+
+    <section id="historySec" class="history" aria-labelledby="hiH" hidden>
+      <div class="sechead">
+        <h2 id="hiH">Недавние переводы</h2>
+        <button id="histClear" type="button" class="ghost">Стереть список</button>
+      </div>
+      <ul id="histList" class="hist"></ul>
+    </section>
+  </main>
+
+  <footer>Переводит Claude. Ошибки возможны, поэтому важные тексты проверяйте у носителя языка.</footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // Адрес функции перевода в Supabase, вида https://<проект>.supabase.co/functions/v1/translate
+  var FUNCTION_URL = "https://udvedodjvrraqyvsbegd.supabase.co/functions/v1/translate";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var MAX_CHARS = 5000;
+  var HISTORY_SIZE = 8;
+
+  var LANG = {
+    ky: { name: "Кыргызча", en: "Kyrgyz", ph: "Текстти ушул жерге жазыңыз" },
+    ru: { name: "Русский", en: "Russian", ph: "Введите текст" }
+  };
+
+  // A proverb: the literal reading ("the eye is a coward, the hand is a hero") would lose the point.
+  var EXAMPLE = {
+    ky: "Иш көп экен деп коркпо: көз коркок, кол баатыр.",
+    ru: "Не бойся, что работы много: глаза боятся, а руки делают."
+  };
+
+  var store = {
+    get: function (k, d) {
+      try { var v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; }
+    },
+    set: function (k, v) {
+      try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage is optional */ }
+    }
+  };
+
+  var srcEl = $("srcText"), outEl = $("outText"), statusEl = $("status");
+  var goBtn = $("goBtn"), swapBtn = $("swapBtn"), copyBtn = $("copyBtn"), clearBtn = $("clearBtn");
+  var kyKeys = $("kyKeys"), counter = $("counter"), badge = $("exampleBadge");
+  var historySec = $("historySec"), histList = $("histList"), histClear = $("histClear");
+
+  var src = store.get("tilmech.src", "ky") === "ru" ? "ru" : "ky";
+  var history = sanitizeHistory(store.get("tilmech.history", []));
+  var isExample = true;
+  var busy = false;
+  var ctl = null;
+  var disabledFor = "";  // set when the translation server can't be used
+  var accessForm = $("accessForm"), accessInput = $("accessCode");
+  var accessCode = store.get("tilmech.access", "");
+
+  function other(l) { return l === "ky" ? "ru" : "ky"; }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  function setStatus(msg, warn) {
+    statusEl.textContent = msg || "";
+    statusEl.classList.toggle("warn", !!warn);
+  }
+
+  function updateCounter() {
+    counter.textContent = srcEl.value.length + " / " + MAX_CHARS;
+  }
+
+  function renderLangs() {
+    $("srcLang").textContent = LANG[src].name;
+    $("dstLang").textContent = LANG[other(src)].name;
+    srcEl.placeholder = LANG[src].ph;
+    srcEl.lang = src;
+    outEl.lang = other(src);
+    kyKeys.hidden = src !== "ky";
+  }
+
+  function setBusy(b) {
+    busy = b;
+    goBtn.textContent = b ? "Остановить" : "Перевести";
+    goBtn.classList.toggle("stop", b);
+    goBtn.disabled = !b && !!disabledFor;
+    swapBtn.disabled = b;
+    srcEl.readOnly = b;
+    outEl.classList.toggle("working", b);
+    outEl.dataset.ph = b ? "Вчитываюсь в текст и перевожу…" : "Перевод появится здесь";
+  }
+
+  function disableTranslator(msg) {
+    disabledFor = msg;
+    goBtn.disabled = !busy;
+    setStatus(msg, true);
+  }
+
+  /* ---------- errors ---------- */
+
+  // Ошибки, после которых кнопка «Перевести» отключается до исправления на сервере.
+  var PERMANENT = {
+    no_url: "Не задан адрес сервера перевода. Впишите его в FUNCTION_URL в начале скрипта этой страницы.",
+    not_configured: "На сервере не задан ключ API. Добавьте секрет ANTHROPIC_API_KEY в Supabase.",
+    bad_api_key: "Сервер ИИ не принял ключ API. Проверьте секрет ANTHROPIC_API_KEY в Supabase."
+  };
+  var COPY = {
+    rate_limited: "Слишком много запросов. Подождите минуту и попробуйте снова.",
+    overloaded: "Сервер ИИ сейчас перегружен. Попробуйте чуть позже.",
+    rejected: "Сервер ИИ отклонил запрос. Частая причина: на счёте API закончились средства.",
+    refused: "Модель отказалась работать с этим текстом. Измените текст и попробуйте снова.",
+    too_long: "Текст слишком длинный. Разбейте его на части.",
+    bad_request: "Сервер не понял запрос. Обновите страницу и попробуйте снова.",
+    interrupted: "Связь прервалась на середине. Нажмите «Перевести» ещё раз."
+  };
+
+  function fail(code, partial) {
+    outEl.textContent = code === "refused" ? "" : (partial || "");
+    if (code === "bad_access_code") {
+      accessForm.hidden = false;
+      setStatus(accessCode ? "Код доступа не подошёл. Введите другой." : "Этому переводчику нужен код доступа.", true);
+      accessInput.focus();
+    } else if (PERMANENT[code]) {
+      disableTranslator(PERMANENT[code]);
+    } else {
+      setStatus(COPY[code] || "Не получилось связаться с сервером. Проверьте интернет и нажмите «Перевести» ещё раз.", true);
+    }
+  }
+
+  /* ---------- flow ---------- */
+
+  async function translate() {
+    var text = srcEl.value.trim();
+    if (!text) {
+      setStatus("Введите текст для перевода.", true);
+      srcEl.focus();
+      return;
+    }
+    if (!FUNCTION_URL) { fail("no_url"); return; }
+
+    ctl = new AbortController();
+    var from = src;
+    var out = "";
+    setBusy(true);
+    setStatus("");
+    isExample = false;
+    badge.hidden = true;
+    outEl.textContent = "";
+
+    try {
+      var headers = { "Content-Type": "application/json" };
+      if (accessCode) headers["x-access-code"] = accessCode;
+      var resp = await fetch(FUNCTION_URL, {
+        method: "POST",
+        headers: headers,
+        body: JSON.stringify({ text: text, from: from, to: other(from) }),
+        signal: ctl.signal
+      });
+      if (!resp.ok) {
+        var info = await resp.json().catch(function () { return {}; });
+        throw { code: info.error || "http_" + resp.status };
+      }
+
+      // Сервер присылает по одному JSON-событию на строку.
+      var reader = resp.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = "";
+      var done = null;
+      for (;;) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        var nl;
+        while ((nl = buffer.indexOf("\n")) >= 0) {
+          var line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (!line) continue;
+          var ev = JSON.parse(line);
+          if (ev.type === "delta") {
+            out += ev.text;
+            outEl.textContent = out;
+          } else if (ev.type === "done") {
+            done = ev;
+          } else if (ev.type === "error") {
+            throw { code: ev.error };
+          }
+        }
+      }
+      if (!done) throw { code: "interrupted" };
+
+      out = out.trim();
+      outEl.textContent = out;
+      accessForm.hidden = true;
+      if (done.truncated) setStatus("Перевод оборвался: текст слишком длинный. Разбейте его на части.", true);
+      else pushHistory({ src: from, text: text, translation: out });
+    } catch (e) {
+      if (e && e.name === "AbortError") outEl.textContent = out;
+      else fail(e && e.code, out);
+    }
+    setBusy(false);
+  }
+
+  /* ---------- history ---------- */
+
+  function sanitizeHistory(list) {
+    return (Array.isArray(list) ? list : []).filter(function (h) {
+      return h && (h.src === "ky" || h.src === "ru") && typeof h.text === "string" && typeof h.translation === "string";
+    }).slice(0, HISTORY_SIZE).map(function (h) {
+      return { src: h.src, text: h.text, translation: h.translation };
+    });
+  }
+
+  function pushHistory(job) {
+    if (!job.translation) return;
+    history = history.filter(function (h) { return !(h.src === job.src && h.text === job.text); });
+    history.unshift(job);
+    history = history.slice(0, HISTORY_SIZE);
+    store.set("tilmech.history", history);
+    renderHistory();
+  }
+
+  function renderHistory() {
+    histList.replaceChildren();
+    historySec.hidden = !history.length;
+    history.forEach(function (h, i) {
+      var li = el("li");
+      var b = el("button");
+      b.type = "button";
+      b.dataset.i = String(i);
+      b.append(
+        el("span", "dir", h.src === "ky" ? "кырг → рус" : "рус → кырг"),
+        el("span", "t", h.text),
+        el("span", "t", h.translation)
+      );
+      li.append(b);
+      histList.append(li);
+    });
+  }
+
+  function restore(h) {
+    if (busy) return;
+    src = h.src;
+    store.set("tilmech.src", src);
+    isExample = false;
+    badge.hidden = true;
+    renderLangs();
+    srcEl.value = h.text;
+    outEl.textContent = h.translation;
+    updateCounter();
+    setStatus(disabledFor, !!disabledFor);
+    srcEl.scrollIntoView({ block: "center", behavior: "auto" });
+  }
+
+  function loadExample() {
+    isExample = true;
+    badge.hidden = false;
+    srcEl.value = EXAMPLE[src];
+    outEl.textContent = EXAMPLE[other(src)];
+    updateCounter();
+  }
+
+  /* ---------- events ---------- */
+
+  goBtn.addEventListener("click", function () {
+    if (busy) { if (ctl) ctl.abort(); return; }
+    translate();
+  });
+
+  srcEl.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !busy && !disabledFor) {
+      e.preventDefault();
+      translate();
+    }
+  });
+
+  srcEl.addEventListener("input", function () {
+    isExample = false;
+    updateCounter();
+    if (!disabledFor) setStatus("");
+  });
+
+  kyKeys.addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-ch]");
+    if (!b || busy) return;
+    var ch = e.shiftKey ? b.dataset.ch.toUpperCase() : b.dataset.ch;
+    var s = srcEl.selectionStart == null ? srcEl.value.length : srcEl.selectionStart;
+    var en = srcEl.selectionEnd == null ? s : srcEl.selectionEnd;
+    if (srcEl.value.length - (en - s) + ch.length > MAX_CHARS) return;
+    srcEl.setRangeText(ch, s, en, "end");
+    srcEl.focus();
+    isExample = false;
+    updateCounter();
+  });
+
+  clearBtn.addEventListener("click", function () {
+    if (busy) return;
+    srcEl.value = "";
+    outEl.textContent = "";
+    isExample = false;
+    badge.hidden = true;
+    updateCounter();
+    setStatus(disabledFor, !!disabledFor);
+    srcEl.focus();
+  });
+
+  swapBtn.addEventListener("click", function () {
+    if (busy) return;
+    var out = outEl.textContent;
+    src = other(src);
+    store.set("tilmech.src", src);
+    renderLangs();
+    if (isExample) { loadExample(); return; }
+    if (out) srcEl.value = out.slice(0, MAX_CHARS);
+    outEl.textContent = "";
+    updateCounter();
+  });
+
+  copyBtn.addEventListener("click", function () {
+    var t = outEl.textContent;
+    if (!t) return;
+    var done = function (label) {
+      copyBtn.textContent = label;
+      setTimeout(function () { copyBtn.textContent = "Скопировать"; }, 1600);
+    };
+    var fallback = function () {
+      var range = document.createRange();
+      range.selectNodeContents(outEl);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      done("Выделено, нажмите Ctrl+C");
+    };
+    try {
+      navigator.clipboard.writeText(t).then(function () { done("Скопировано"); }, fallback);
+    } catch (e) {
+      fallback();
+    }
+  });
+
+  histList.addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-i]");
+    if (!b) return;
+    var h = history[Number(b.dataset.i)];
+    if (h) restore(h);
+  });
+
+  histClear.addEventListener("click", function () {
+    history = [];
+    store.set("tilmech.history", history);
+    renderHistory();
+  });
+
+  accessForm.addEventListener("submit", function (e) {
+    e.preventDefault();
+    accessCode = accessInput.value.trim();
+    store.set("tilmech.access", accessCode);
+    accessForm.hidden = true;
+    setStatus("Код сохранён. Нажмите «Перевести».");
+  });
+
+  /* ---------- boot ---------- */
+
+  renderLangs();
+  loadExample();
+  renderHistory();
+  setStatus("Это пример. Вставьте свой текст и нажмите «Перевести».");
+  if (!FUNCTION_URL) disableTranslator(PERMANENT.no_url);
+})();
+</script>
+</body>
+</html>
