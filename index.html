@@ -311,6 +311,8 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
               </div>
               <span id="counter" class="count">0 / 5000</span>
               <span class="grow"></span>
+              <button id="photoBtn" type="button" class="ghost" title="Сфотографировать текст или выбрать снимок">Фото</button>
+              <input id="photoInput" type="file" accept="image/*" hidden>
               <button id="clearBtn" type="button" class="ghost">Очистить</button>
               <button id="goBtn" type="button" class="primary" title="Ctrl + Enter">Перевести</button>
             </div>
@@ -355,6 +357,8 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
   var $ = function (id) { return document.getElementById(id); };
   var MAX_CHARS = 5000;
   var HISTORY_SIZE = 8;
+  // Длинная сторона фото перед отправкой: больше модель всё равно не разглядит.
+  var PHOTO_SIDE = 1568;
 
   var LANG = {
     ky: { name: "Кыргызча", en: "Kyrgyz", ph: "Текстти ушул жерге жазыңыз" },
@@ -378,6 +382,7 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
 
   var srcEl = $("srcText"), outEl = $("outText"), statusEl = $("status");
   var goBtn = $("goBtn"), swapBtn = $("swapBtn"), copyBtn = $("copyBtn"), clearBtn = $("clearBtn");
+  var photoBtn = $("photoBtn"), photoInput = $("photoInput");
   var kyKeys = $("kyKeys"), counter = $("counter"), badge = $("exampleBadge");
   var historySec = $("historySec"), histList = $("histList"), histClear = $("histClear");
 
@@ -417,20 +422,22 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
     kyKeys.hidden = src !== "ky";
   }
 
-  function setBusy(b) {
+  function setBusy(b, ph) {
     busy = b;
     goBtn.textContent = b ? "Остановить" : "Перевести";
     goBtn.classList.toggle("stop", b);
     goBtn.disabled = !b && !!disabledFor;
     swapBtn.disabled = b;
+    photoBtn.disabled = b || !!disabledFor;
     srcEl.readOnly = b;
     outEl.classList.toggle("working", b);
-    outEl.dataset.ph = b ? "Вчитываюсь в текст и перевожу…" : "Перевод появится здесь";
+    outEl.dataset.ph = b ? (ph || "Вчитываюсь в текст и перевожу…") : "Перевод появится здесь";
   }
 
   function disableTranslator(msg) {
     disabledFor = msg;
     goBtn.disabled = !busy;
+    photoBtn.disabled = true;
     setStatus(msg, true);
   }
 
@@ -448,6 +455,9 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
     rejected: "Сервер ИИ отклонил запрос. Частая причина: на счёте API закончились средства.",
     refused: "Модель отказалась работать с этим текстом. Измените текст и попробуйте снова.",
     too_long: "Текст слишком длинный. Разбейте его на части.",
+    no_text: "На фото не нашлось текста. Снимите ближе и ровнее, при хорошем свете.",
+    image_too_big: "Фото слишком большое. Выберите снимок поменьше.",
+    bad_image: "Не получилось открыть фото. Попробуйте другой снимок в JPG или PNG.",
     bad_request: "Сервер не понял запрос. Обновите страницу и попробуйте снова.",
     interrupted: "Связь прервалась на середине. Нажмите «Перевести» ещё раз."
   };
@@ -466,6 +476,96 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
   }
 
   /* ---------- flow ---------- */
+
+  // Отправляет запрос функции и читает ответ: сервер присылает по одному JSON-событию на строку.
+  async function callServer(payload, onDelta) {
+    var headers = { "Content-Type": "application/json" };
+    if (accessCode) headers["x-access-code"] = encodeURIComponent(accessCode);
+    var resp = await fetch(FUNCTION_URL, {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify(payload),
+      signal: ctl.signal
+    });
+    if (!resp.ok) {
+      var info = await resp.json().catch(function () { return {}; });
+      throw { code: info.error || "http_" + resp.status };
+    }
+
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = "";
+    var done = null;
+    for (;;) {
+      var chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      var nl;
+      while ((nl = buffer.indexOf("\n")) >= 0) {
+        var line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line) continue;
+        var ev = JSON.parse(line);
+        if (ev.type === "delta") onDelta(ev.text);
+        else if (ev.type === "done") done = ev;
+        else if (ev.type === "error") throw { code: ev.error };
+      }
+    }
+    if (!done) throw { code: "interrupted" };
+    return done;
+  }
+
+  // Уменьшает фото и перекодирует в JPEG; возвращает base64 без префикса data:.
+  function shrinkPhoto(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        var k = Math.min(1, PHOTO_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+        var c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(img.naturalWidth * k));
+        c.height = Math.max(1, Math.round(img.naturalHeight * k));
+        var g = c.getContext("2d");
+        g.fillStyle = "#fff";  // прозрачный PNG иначе станет чёрным
+        g.fillRect(0, 0, c.width, c.height);
+        g.drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL("image/jpeg", 0.85).split(",")[1]);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("decode")); };
+      img.src = url;
+    });
+  }
+
+  // Распознаёт текст на фото, кладёт его в поле ввода и сразу переводит.
+  async function readPhoto(file) {
+    if (!FUNCTION_URL) { fail("no_url"); return; }
+    var image;
+    try { image = await shrinkPhoto(file); } catch (e) { fail("bad_image"); return; }
+
+    ctl = new AbortController();
+    var text = "";
+    var ok = false;
+    setBusy(true, "Читаю текст на фото…");
+    setStatus("");
+    isExample = false;
+    badge.hidden = true;
+    srcEl.value = "";
+    outEl.textContent = "";
+    updateCounter();
+
+    try {
+      await callServer({ image: image, media_type: "image/jpeg", from: src }, function (t) { text += t; });
+      srcEl.value = text.trim().slice(0, MAX_CHARS);
+      updateCounter();
+      accessForm.hidden = true;
+      ok = !!srcEl.value;
+    } catch (e) {
+      if (!(e && e.name === "AbortError")) fail(e && e.code);
+    }
+    setBusy(false);
+    if (ok) translate();
+  }
 
   async function translate() {
     var text = srcEl.value.trim();
@@ -486,45 +586,10 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
     outEl.textContent = "";
 
     try {
-      var headers = { "Content-Type": "application/json" };
-      if (accessCode) headers["x-access-code"] = encodeURIComponent(accessCode);
-      var resp = await fetch(FUNCTION_URL, {
-        method: "POST",
-        headers: headers,
-        body: JSON.stringify({ text: text, from: from, to: other(from) }),
-        signal: ctl.signal
+      var done = await callServer({ text: text, from: from, to: other(from) }, function (t) {
+        out += t;
+        outEl.textContent = out;
       });
-      if (!resp.ok) {
-        var info = await resp.json().catch(function () { return {}; });
-        throw { code: info.error || "http_" + resp.status };
-      }
-
-      // Сервер присылает по одному JSON-событию на строку.
-      var reader = resp.body.getReader();
-      var decoder = new TextDecoder();
-      var buffer = "";
-      var done = null;
-      for (;;) {
-        var chunk = await reader.read();
-        if (chunk.done) break;
-        buffer += decoder.decode(chunk.value, { stream: true });
-        var nl;
-        while ((nl = buffer.indexOf("\n")) >= 0) {
-          var line = buffer.slice(0, nl).trim();
-          buffer = buffer.slice(nl + 1);
-          if (!line) continue;
-          var ev = JSON.parse(line);
-          if (ev.type === "delta") {
-            out += ev.text;
-            outEl.textContent = out;
-          } else if (ev.type === "done") {
-            done = ev;
-          } else if (ev.type === "error") {
-            throw { code: ev.error };
-          }
-        }
-      }
-      if (!done) throw { code: "interrupted" };
 
       out = out.trim();
       outEl.textContent = out;
@@ -630,6 +695,17 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
     updateCounter();
   });
 
+  photoBtn.addEventListener("click", function () {
+    if (busy || disabledFor) return;
+    photoInput.click();
+  });
+
+  photoInput.addEventListener("change", function () {
+    var file = photoInput.files && photoInput.files[0];
+    photoInput.value = "";  // чтобы тот же снимок можно было выбрать ещё раз
+    if (file) readPhoto(file);
+  });
+
   clearBtn.addEventListener("click", function () {
     if (busy) return;
     srcEl.value = "";
@@ -701,7 +777,7 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
   renderLangs();
   loadExample();
   renderHistory();
-  setStatus("Это пример. Вставьте свой текст и нажмите «Перевести».");
+  setStatus("Это пример. Вставьте свой текст или нажмите «Фото», чтобы перевести текст со снимка.");
   if (!FUNCTION_URL) disableTranslator(PERMANENT.no_url);
 })();
 </script>
