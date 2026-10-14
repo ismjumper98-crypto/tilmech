@@ -155,6 +155,7 @@ main { display: flex; flex-direction: column; gap: 36px; }
   resize: vertical;
 }
 #srcText:focus-visible { outline-offset: -2px; }
+#srcText.drop { outline: 2px dashed var(--accent); outline-offset: -6px; }
 #srcText::placeholder { color: var(--muted); opacity: .8; }
 .outtext { white-space: pre-wrap; overflow-wrap: anywhere; }
 .outtext:empty::before { content: attr(data-ph); color: var(--muted); }
@@ -302,17 +303,19 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
         <div class="panes">
           <div class="pane">
             <label class="sr" for="srcText">Текст для перевода</label>
-            <textarea id="srcText" maxlength="5000" rows="8" spellcheck="false"></textarea>
+            <textarea id="srcText" maxlength="30000" rows="8" spellcheck="false"></textarea>
             <div class="panefoot">
               <div id="kyKeys" class="keys" role="group" aria-label="Кыргызские буквы">
                 <button type="button" class="key" data-ch="ө" title="Shift даёт заглавную">ө</button>
                 <button type="button" class="key" data-ch="ү" title="Shift даёт заглавную">ү</button>
                 <button type="button" class="key" data-ch="ң" title="Shift даёт заглавную">ң</button>
               </div>
-              <span id="counter" class="count">0 / 5000</span>
+              <span id="counter" class="count">0 / 30000</span>
               <span class="grow"></span>
               <button id="photoBtn" type="button" class="ghost" title="Сфотографировать текст или выбрать снимок">Фото</button>
               <input id="photoInput" type="file" accept="image/*" hidden>
+              <button id="fileBtn" type="button" class="ghost" title="Word (.docx), PDF или .txt; файл можно и перетащить сюда">Файл</button>
+              <input id="fileInput" type="file" accept=".docx,.pdf,.txt,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
               <button id="clearBtn" type="button" class="ghost">Очистить</button>
               <button id="goBtn" type="button" class="primary" title="Ctrl + Enter">Перевести</button>
             </div>
@@ -355,10 +358,17 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
   var FUNCTION_URL = "https://udvedodjvrraqyvsbegd.supabase.co/functions/v1/translate";
 
   var $ = function (id) { return document.getElementById(id); };
+  // Сервер переводит за раз до MAX_CHARS знаков; текст длиннее страница делит на части.
   var MAX_CHARS = 5000;
+  // Предел поля ввода: примерно 10–12 страниц документа.
+  var MAX_DOC = 30000;
   var HISTORY_SIZE = 8;
   // Длинная сторона фото перед отправкой: больше модель всё равно не разглядит.
   var PHOTO_SIDE = 1568;
+  var MAX_PDF_BYTES = 10 * 1024 * 1024;
+  // Читает .docx прямо в браузере; грузится только когда выбрали файл Word.
+  var MAMMOTH_URL = "https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.9.0/mammoth.browser.min.js";
+  var MAMMOTH_SRI = "sha384-F9c4WGfCRfzaY1ngABA8Z7qHFDuWabKbcwCb2Tk3Qf4njoUVhOChtw0UrXJmSp1y";
 
   var LANG = {
     ky: { name: "Кыргызча", en: "Kyrgyz", ph: "Текстти ушул жерге жазыңыз" },
@@ -382,7 +392,7 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
 
   var srcEl = $("srcText"), outEl = $("outText"), statusEl = $("status");
   var goBtn = $("goBtn"), swapBtn = $("swapBtn"), copyBtn = $("copyBtn"), clearBtn = $("clearBtn");
-  var photoBtn = $("photoBtn"), photoInput = $("photoInput");
+  var photoBtn = $("photoBtn"), photoInput = $("photoInput"), fileBtn = $("fileBtn"), fileInput = $("fileInput");
   var kyKeys = $("kyKeys"), counter = $("counter"), badge = $("exampleBadge");
   var historySec = $("historySec"), histList = $("histList"), histClear = $("histClear");
 
@@ -410,7 +420,7 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
   }
 
   function updateCounter() {
-    counter.textContent = srcEl.value.length + " / " + MAX_CHARS;
+    counter.textContent = srcEl.value.length + " / " + MAX_DOC;
   }
 
   function renderLangs() {
@@ -428,7 +438,7 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
     goBtn.classList.toggle("stop", b);
     goBtn.disabled = !b && !!disabledFor;
     swapBtn.disabled = b;
-    photoBtn.disabled = b || !!disabledFor;
+    photoBtn.disabled = fileBtn.disabled = b || !!disabledFor;
     srcEl.readOnly = b;
     outEl.classList.toggle("working", b);
     outEl.dataset.ph = b ? (ph || "Вчитываюсь в текст и перевожу…") : "Перевод появится здесь";
@@ -437,7 +447,7 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
   function disableTranslator(msg) {
     disabledFor = msg;
     goBtn.disabled = !busy;
-    photoBtn.disabled = true;
+    photoBtn.disabled = fileBtn.disabled = true;
     setStatus(msg, true);
   }
 
@@ -455,9 +465,13 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
     rejected: "Сервер ИИ отклонил запрос. Частая причина: на счёте API закончились средства.",
     refused: "Модель отказалась работать с этим текстом. Измените текст и попробуйте снова.",
     too_long: "Текст слишком длинный. Разбейте его на части.",
-    no_text: "На фото не нашлось текста. Снимите ближе и ровнее, при хорошем свете.",
-    image_too_big: "Фото слишком большое. Выберите снимок поменьше.",
+    no_text: "В файле не нашлось текста. Фото снимите ближе и ровнее, при хорошем свете.",
+    file_too_big: "Файл слишком большой. PDF можно до 10 МБ: разбейте его на части.",
     bad_image: "Не получилось открыть фото. Попробуйте другой снимок в JPG или PNG.",
+    bad_file: "Такой файл не подходит. Можно загрузить Word (.docx), PDF, .txt или фото.",
+    old_doc: "Старый формат Word (.doc) не читается. Откройте файл в Word и сохраните как .docx.",
+    bad_docx: "Не получилось прочитать файл Word. Проверьте, что он открывается, или сохраните его в PDF.",
+    no_lib: "Не загрузилась программа для чтения Word. Проверьте интернет и попробуйте ещё раз.",
     bad_request: "Сервер не понял запрос. Обновите страницу и попробуйте снова.",
     interrupted: "Связь прервалась на середине. Нажмите «Перевести» ещё раз."
   };
@@ -537,37 +551,123 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
     });
   }
 
-  // Распознаёт текст на фото, кладёт его в поле ввода и сразу переводит.
-  async function readPhoto(file) {
-    if (!FUNCTION_URL) { fail("no_url"); return; }
-    var image;
-    try { image = await shrinkPhoto(file); } catch (e) { fail("bad_image"); return; }
+  function readAsBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var r = new FileReader();
+      r.onload = function () { resolve(String(r.result).split(",")[1] || ""); };
+      r.onerror = function () { reject(r.error); };
+      r.readAsDataURL(file);
+    });
+  }
 
-    ctl = new AbortController();
-    var text = "";
-    var ok = false;
-    setBusy(true, "Читаю текст на фото…");
+  var mammothLoad = null;
+  function loadMammoth() {
+    if (!mammothLoad) {
+      mammothLoad = new Promise(function (resolve, reject) {
+        var s = document.createElement("script");
+        s.src = MAMMOTH_URL;
+        s.integrity = MAMMOTH_SRI;
+        s.crossOrigin = "anonymous";
+        s.onload = function () { window.mammoth ? resolve(window.mammoth) : reject(new Error("no mammoth")); };
+        s.onerror = function () { mammothLoad = null; reject(new Error("load")); };
+        document.head.append(s);
+      });
+    }
+    return mammothLoad;
+  }
+
+  // Готовит поле к новому тексту из файла.
+  function startFromFile(ph) {
+    setBusy(true, ph);
     setStatus("");
     isExample = false;
     badge.hidden = true;
     srcEl.value = "";
     outEl.textContent = "";
     updateCounter();
+  }
 
+  // Кладёт текст из файла в поле ввода и сразу переводит.
+  function useText(text, truncated) {
+    text = text.trim();
+    if (!text) { fail("no_text"); return; }
+    var cut = truncated || text.length > MAX_DOC;
+    srcEl.value = text.slice(0, MAX_DOC);
+    updateCounter();
+    translate(cut ? "Документ длинный: переведены только первые " + srcEl.value.length + " знаков. Остальное загрузите отдельным файлом." : "");
+  }
+
+  // Фото и PDF читает модель на сервере: так распознаются и сканы.
+  async function extractOnServer(payload, ph) {
+    ctl = new AbortController();
+    var text = "";
+    var done = null;
+    startFromFile(ph);
     try {
-      await callServer({ image: image, media_type: "image/jpeg", from: src }, function (t) { text += t; });
-      srcEl.value = text.trim().slice(0, MAX_CHARS);
-      updateCounter();
+      done = await callServer(payload, function (t) { text += t; });
       accessForm.hidden = true;
-      ok = !!srcEl.value;
     } catch (e) {
       if (!(e && e.name === "AbortError")) fail(e && e.code);
     }
     setBusy(false);
-    if (ok) translate();
+    if (done) useText(text, done.truncated);
   }
 
-  async function translate() {
+  async function readFile(file) {
+    if (busy || disabledFor) return;
+    if (!FUNCTION_URL) { fail("no_url"); return; }
+    var name = (file.name || "").toLowerCase();
+    var type = file.type || "";
+
+    if (type.indexOf("image/") === 0) {
+      var image;
+      try { image = await shrinkPhoto(file); } catch (e) { fail("bad_image"); return; }
+      extractOnServer({ file: image, media_type: "image/jpeg", from: src }, "Читаю текст на фото…");
+    } else if (type === "application/pdf" || /\.pdf$/.test(name)) {
+      if (file.size > MAX_PDF_BYTES) { fail("file_too_big"); return; }
+      var pdf;
+      try { pdf = await readAsBase64(file); } catch (e) { fail("bad_file"); return; }
+      extractOnServer({ file: pdf, media_type: "application/pdf", from: src }, "Читаю документ…");
+    } else if (/\.docx$/.test(name)) {
+      startFromFile("Открываю документ…");
+      var text = null, code = "bad_docx";
+      try {
+        var lib = await loadMammoth().catch(function (e) { code = "no_lib"; throw e; });
+        text = (await lib.extractRawText({ arrayBuffer: await file.arrayBuffer() })).value;
+      } catch (e) {
+        fail(code);
+      }
+      setBusy(false);
+      if (text != null) useText(text);
+    } else if (type === "text/plain" || /\.txt$/.test(name)) {
+      useText(await file.text());
+    } else if (/\.doc$/.test(name)) {
+      fail("old_doc");
+    } else {
+      fail("bad_file");
+    }
+  }
+
+  // Делит длинный текст на части не больше MAX_CHARS: по абзацам, иначе по предложениям, иначе по словам.
+  // sep — то, чем часть отделялась от следующей; им же склеиваются переводы.
+  function splitText(text) {
+    var parts = [];
+    var rest = text;
+    while (rest.length > MAX_CHARS) {
+      var cut = rest.lastIndexOf("\n", MAX_CHARS), sep = "\n";
+      if (cut < MAX_CHARS / 2) { cut = rest.lastIndexOf(". ", MAX_CHARS - 1) + 1; sep = " "; }
+      if (cut < MAX_CHARS / 2) cut = rest.lastIndexOf(" ", MAX_CHARS);
+      if (cut < MAX_CHARS / 2) { cut = MAX_CHARS; sep = ""; }
+      var head = rest.slice(0, cut), tail = rest.slice(cut);
+      if (sep === "\n") sep = (head.match(/\s*$/)[0] + tail.match(/^\s*/)[0]).replace(/[^\n]/g, "") || "\n";
+      parts.push({ text: head.trim(), sep: sep });
+      rest = tail.replace(/^\s+/, "");
+    }
+    parts.push({ text: rest.trim(), sep: "" });
+    return parts.filter(function (p) { return p.text; });
+  }
+
+  async function translate(note) {
     var text = srcEl.value.trim();
     if (!text) {
       setStatus("Введите текст для перевода.", true);
@@ -578,7 +678,9 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
 
     ctl = new AbortController();
     var from = src;
-    var out = "";
+    var out = "", piece = "";
+    var truncated = false;
+    var parts = splitText(text);
     setBusy(true);
     setStatus("");
     isExample = false;
@@ -586,19 +688,29 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
     outEl.textContent = "";
 
     try {
-      var done = await callServer({ text: text, from: from, to: other(from) }, function (t) {
-        out += t;
-        outEl.textContent = out;
-      });
+      for (var i = 0; i < parts.length; i++) {
+        if (parts.length > 1) setStatus("Перевожу часть " + (i + 1) + " из " + parts.length + "…");
+        piece = "";
+        var done = await callServer({ text: parts[i].text, from: from, to: other(from) }, function (t) {
+          piece += t;
+          outEl.textContent = out + piece;
+        });
+        truncated = truncated || done.truncated;
+        out += piece.trim() + parts[i].sep;
+        piece = "";
+      }
 
       out = out.trim();
       outEl.textContent = out;
       accessForm.hidden = true;
-      if (done.truncated) setStatus("Перевод оборвался: текст слишком длинный. Разбейте его на части.", true);
-      else pushHistory({ src: from, text: text, translation: out });
+      if (truncated) setStatus("Перевод оборвался: текст слишком длинный. Разбейте его на части.", true);
+      else {
+        setStatus(note || "", !!note);
+        pushHistory({ src: from, text: text, translation: out });
+      }
     } catch (e) {
-      if (e && e.name === "AbortError") outEl.textContent = out;
-      else fail(e && e.code, out);
+      if (e && e.name === "AbortError") { outEl.textContent = out + piece; setStatus(""); }
+      else fail(e && e.code, out + piece);
     }
     setBusy(false);
   }
@@ -688,7 +800,7 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
     var ch = e.shiftKey ? b.dataset.ch.toUpperCase() : b.dataset.ch;
     var s = srcEl.selectionStart == null ? srcEl.value.length : srcEl.selectionStart;
     var en = srcEl.selectionEnd == null ? s : srcEl.selectionEnd;
-    if (srcEl.value.length - (en - s) + ch.length > MAX_CHARS) return;
+    if (srcEl.value.length - (en - s) + ch.length > MAX_DOC) return;
     srcEl.setRangeText(ch, s, en, "end");
     srcEl.focus();
     isExample = false;
@@ -703,7 +815,34 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
   photoInput.addEventListener("change", function () {
     var file = photoInput.files && photoInput.files[0];
     photoInput.value = "";  // чтобы тот же снимок можно было выбрать ещё раз
-    if (file) readPhoto(file);
+    if (file) readFile(file);
+  });
+
+  fileBtn.addEventListener("click", function () {
+    if (busy || disabledFor) return;
+    fileInput.click();
+  });
+
+  fileInput.addEventListener("change", function () {
+    var file = fileInput.files && fileInput.files[0];
+    fileInput.value = "";
+    if (file) readFile(file);
+  });
+
+  // Файл можно перетащить в поле ввода.
+  srcEl.addEventListener("dragover", function (e) {
+    if (e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types, "Files") >= 0) {
+      e.preventDefault();
+      srcEl.classList.add("drop");
+    }
+  });
+  srcEl.addEventListener("dragleave", function () { srcEl.classList.remove("drop"); });
+  srcEl.addEventListener("drop", function (e) {
+    var file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    srcEl.classList.remove("drop");
+    if (!file) return;
+    e.preventDefault();
+    readFile(file);
   });
 
   clearBtn.addEventListener("click", function () {
@@ -724,7 +863,7 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
     store.set("tilmech.src", src);
     renderLangs();
     if (isExample) { loadExample(); return; }
-    if (out) srcEl.value = out.slice(0, MAX_CHARS);
+    if (out) srcEl.value = out.slice(0, MAX_DOC);
     outEl.textContent = "";
     updateCounter();
   });
@@ -777,7 +916,7 @@ footer { color: var(--muted); font-size: var(--t-sm); max-width: 65ch; }
   renderLangs();
   loadExample();
   renderHistory();
-  setStatus("Это пример. Вставьте свой текст или нажмите «Фото», чтобы перевести текст со снимка.");
+  setStatus("Это пример. Вставьте свой текст, загрузите файл (Word, PDF, .txt) или нажмите «Фото».");
   if (!FUNCTION_URL) disableTranslator(PERMANENT.no_url);
 })();
 </script>
